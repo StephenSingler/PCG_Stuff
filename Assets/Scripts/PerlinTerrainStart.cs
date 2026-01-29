@@ -4,6 +4,10 @@ using UnityEngine;
 [RequireComponent(typeof(Terrain))]
 public class BasicPerlinTerrain : MonoBehaviour
 {
+    [Header("Manual Generation")]
+    [Tooltip("Toggle this ON to regenerate once in the editor. It will auto-reset to OFF.")]
+    public bool regenerate = false;
+
     [Header("Terrain Resolution")]
     [Range(33, 1025)]
     public int resolution = 513;
@@ -21,23 +25,21 @@ public class BasicPerlinTerrain : MonoBehaviour
     [Range(0f, 1f)]
     public float heightScale = 0.2f;
 
-    Terrain terrain;
-    TerrainData terrainData;
-
-    /*
-    void Awake()
-    {
-        Initialize();
-        GenerateTerrain();
-    }*/
+    private Terrain terrain;
+    private TerrainData terrainData;
 
     void OnValidate()
     {
-        if (!Application.isPlaying)
-        {
-            Initialize();
-            GenerateTerrain();
-        }
+        // Don't do anything automatically while playing.
+        if (Application.isPlaying) return;
+
+        // Only regenerate when explicitly requested.
+        if (!regenerate) return;
+
+        regenerate = false;
+
+        Initialize();
+        GenerateTerrain();
     }
 
     void Initialize()
@@ -45,7 +47,7 @@ public class BasicPerlinTerrain : MonoBehaviour
         terrain = GetComponent<Terrain>();
         terrainData = terrain.terrainData;
 
-        // Ensure valid resolution
+        // Ensure valid resolution (safe since you said you won't change it after sculpting).
         resolution = Mathf.ClosestPowerOfTwo(resolution - 1) + 1;
         terrainData.heightmapResolution = resolution;
     }
