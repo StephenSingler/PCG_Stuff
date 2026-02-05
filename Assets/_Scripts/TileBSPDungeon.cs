@@ -28,6 +28,20 @@ public class ModularTileBSPDungeon : MonoBehaviour
     public bool showRooms = false;
     public bool showLabels = false;
 
+    [Header("Room Labeling")]
+    public bool labelRoomsFromGrammar = true;
+    public GameObject minibossRoomPrefab; // spawned in 'm' rooms
+    public GameObject combatRoomPrefab;   // spawned in 'c' rooms
+    public float roomMarkerY = 0.2f;      // height above floor
+
+
+    [Tooltip("If grammar output is shorter than room count, use this label for remaining rooms.")]
+    public char defaultRoomLabel = 'c';
+
+    [Tooltip("If true, sort rooms by distance from entrance so the string reads like a progression.")]
+    public bool sortRoomsByDistanceFromEntrance = true;
+
+
     [Header("Loot")]
     public GameObject lootPrefab; // collectable cube
     [Tooltip("Average loot per room before size weighting (keep small, like 0.1-0.4).")]
@@ -55,6 +69,20 @@ public class ModularTileBSPDungeon : MonoBehaviour
     [Tooltip("If true, spawn/goal can't overlap loot.")]
     public bool preventSpawnGoalOnLoot = true;
 
+    [Header("Grammar (WIP)")]
+    [Tooltip("Starting symbol to expand, e.g. 'S'")]
+    public string grammarStart = "S";
+
+    [Tooltip("How many expansion steps to run at most.")]
+    public int grammarMaxSteps = 20;
+
+    [Tooltip("Stop early if the string gets too long.")]
+    public int grammarMaxLength = 200;
+
+    [Tooltip("If true, prints each expansion step.")]
+    public bool grammarLogSteps = true;
+
+
 
     private int[,] mapGrid; // 0 = empty, 1 = room, 2 = corridor
     private List<RoomTile> placedTiles = new List<RoomTile>();
@@ -64,6 +92,10 @@ public class ModularTileBSPDungeon : MonoBehaviour
     private HashSet<(Vector2Int a, Vector2Int b)> spawnedDoors = new HashSet<(Vector2Int, Vector2Int)>();
     private HashSet<(Vector2Int a, Vector2Int b)> spawnedHiddenWalls = new HashSet<(Vector2Int, Vector2Int)>();
     private HashSet<Vector2Int> reservedPositions = new HashSet<Vector2Int>(); // spawn/goal reservations
+    private string lastGrammarOutput = "";
+    private BSPNode entranceNode;
+    private BSPNode bossNode;
+
 
 
 
@@ -88,7 +120,14 @@ public class ModularTileBSPDungeon : MonoBehaviour
         CreateRooms(rootNode);
         ConnectRooms(rootNode);
         InstantiateTiles();
-        SpawnSpawnAndGoal();
+
+        if (labelRoomsFromGrammar)
+        {
+            LabelRoomsFromGrammarAndChooseEntranceBoss();
+        }
+
+        SpawnSpawnAndGoal();  // now uses entranceNode/bossNode if available
+        SpawnRoomMarkers();
         SpawnLoot();
         RemoveInteriorWalls();
     }
@@ -103,6 +142,8 @@ public class ModularTileBSPDungeon : MonoBehaviour
         public Room room;
         public string label;
         public GameObject hierarchyParent;
+
+        public char roomLabel = '?';
 
         public BSPNode(int x, int y, int w, int h)
         {
@@ -595,16 +636,17 @@ public class ModularTileBSPDungeon : MonoBehaviour
 
         if (node.IsLeaf() && node.room != null)
         {
+            // Only spawn loot in treasure rooms
+            if (node.roomLabel != 't')
+                return;
+
             Room r = node.room;
             int area = r.width * r.height;
 
-            // "Smallness" is 1 for smallest room, 0 for largest room.
             float smallness = 0f;
             if (maxArea != minArea)
                 smallness = 1f - Mathf.InverseLerp(minArea, maxArea, area);
 
-            // Expected loot count for this room:
-            // base + bonus for small rooms.
             float expected = lootBasePerRoom * Mathf.Lerp(1f, lootSmallRoomMultiplier, smallness);
 
             int count = Mathf.FloorToInt(expected);
@@ -617,10 +659,9 @@ public class ModularTileBSPDungeon : MonoBehaviour
             {
                 if (TryPickLootSpot(r, out int lx, out int ly))
                 {
-                    Vector3 pos = new Vector3(lx, 0.2f, ly); // 0.5f so a cube sits above floor; tweak as needed
+                    Vector3 pos = new Vector3(lx, 0.2f, ly);
                     GameObject loot = Instantiate(lootPrefab, pos, Quaternion.identity);
 
-                    // Parent to this BSP node in hierarchy (nice for organization)
                     if (node.hierarchyParent != null)
                         loot.transform.parent = node.hierarchyParent.transform;
                     else
@@ -630,11 +671,14 @@ public class ModularTileBSPDungeon : MonoBehaviour
                         lootPositions.Add(new Vector2Int(lx, ly));
                 }
             }
+
+            return; // leaf done
         }
 
         SpawnLootInRooms(node.left, minArea, maxArea);
         SpawnLootInRooms(node.right, minArea, maxArea);
     }
+
 
     bool TryPickLootSpot(Room r, out int x, out int y)
     {
@@ -687,28 +731,21 @@ public class ModularTileBSPDungeon : MonoBehaviour
     {
         if (goalPrefab == null) return;
 
-        // Collect leaf nodes with rooms so we can parent nicely.
+        BSPNode spawnNode = entranceNode;
+        BSPNode goalNode = bossNode;
         List<BSPNode> roomNodes = new List<BSPNode>();
-        CollectRoomNodes(rootNode, roomNodes);
 
-        if (roomNodes.Count == 0) return;
-
-        BSPNode spawnNode = roomNodes[Random.Range(0, roomNodes.Count)];
-        BSPNode goalNode = spawnNode;
-
-        if (roomNodes.Count > 1)
+        if (spawnNode == null || goalNode == null)
         {
-            if (placeGoalFarFromSpawn)
-            {
-                goalNode = FindFarthestRoomNode(spawnNode, roomNodes);
-            }
-            else
-            {
-                // pick a different room randomly
-                while (goalNode == spawnNode)
-                    goalNode = roomNodes[Random.Range(0, roomNodes.Count)];
-            }
+            CollectRoomNodes(rootNode, roomNodes);
+            if (roomNodes.Count == 0) return;
+
+            spawnNode = roomNodes[Random.Range(0, roomNodes.Count)];
+            goalNode = (placeGoalFarFromSpawn && roomNodes.Count > 1)
+                ? FindFarthestRoomNode(spawnNode, roomNodes)
+                : spawnNode;
         }
+
 
         // Spawn point
         if (TryPickRoomSpot(spawnNode.room, spawnGoalEdgePadding, out int sx, out int sy))
@@ -820,5 +857,287 @@ public class ModularTileBSPDungeon : MonoBehaviour
         x = y = 0;
         return false;
     }
+
+    void SpawnRoomMarkers()
+    {
+        // If neither is set, do nothing.
+        if (minibossRoomPrefab == null && combatRoomPrefab == null) return;
+
+        // Collect leaf room nodes
+        List<BSPNode> roomNodes = new List<BSPNode>();
+        CollectRoomNodes(rootNode, roomNodes);
+        if (roomNodes.Count == 0) return;
+
+        foreach (var node in roomNodes)
+        {
+            if (node.room == null) continue;
+
+            GameObject prefab = null;
+
+            if (node.roomLabel == 'm') prefab = minibossRoomPrefab;
+            else if (node.roomLabel == 'c') prefab = combatRoomPrefab;
+
+            if (prefab == null) continue;
+
+            // Use the room’s center tile (int centerX/centerY)
+            int cx = node.room.centerX;
+            int cy = node.room.centerY;
+
+            // Reserve this tile so loot/spawn/goal don't overlap it
+            reservedPositions.Add(new Vector2Int(cx, cy));
+
+            Vector3 pos = new Vector3(cx, roomMarkerY, cy);
+            GameObject marker = Instantiate(prefab, pos, Quaternion.identity);
+
+            // Parent neatly under the room's BSP hierarchy node
+            marker.transform.parent = (node.hierarchyParent != null) ? node.hierarchyParent.transform : transform;
+        }
+    }
+
+
+    // ---------------------
+    // Grammar (Weighted / Debug)
+    // ---------------------
+
+    void LabelRoomsFromGrammarAndChooseEntranceBoss()
+    {
+        // 1) collect leaf room nodes
+        List<BSPNode> roomNodes = new List<BSPNode>();
+        CollectRoomNodes(rootNode, roomNodes);
+        if (roomNodes.Count == 0) return;
+
+        // 2) generate grammar output (terminal-only)
+        lastGrammarOutput = GenerateGrammarString_TerminalOnly();
+        Debug.Log($"[Grammar] Final terminal string: {lastGrammarOutput} (rooms: {roomNodes.Count})");
+
+        // 3) ensure we have exactly one 'e' and one 'b' in the string
+        // (your grammar should already do this, but this makes it robust)
+        if (!lastGrammarOutput.Contains("e") || !lastGrammarOutput.Contains("b"))
+        {
+            Debug.LogWarning("[Grammar] Missing 'e' or 'b' in output; labeling aborted.");
+            return;
+        }
+
+        // 4) pick which room becomes entrance and boss FIRST
+        // We'll map 'e' and 'b' positions in the string to actual rooms after ordering.
+
+        // Strategy: order rooms, then assign characters in order.
+        // Start order: random but stable -> choose entrance index by where 'e' occurs.
+        // Better: we'll pick an entrance room first (random), then sort others by distance from it.
+        entranceNode = roomNodes[Random.Range(0, roomNodes.Count)];
+
+        // Sort roomNodes to make progression feel coherent.
+        if (sortRoomsByDistanceFromEntrance)
+            roomNodes.Sort((a, b) => DistSq(a, entranceNode).CompareTo(DistSq(b, entranceNode)));
+        else
+            Shuffle(roomNodes);
+
+        // Now, we want the room that gets label 'e' to be the entranceNode.
+        // Easiest: rotate the room list so indexOf('e') points to entranceNode.
+        int eIndex = lastGrammarOutput.IndexOf('e');
+        int entranceIndex = roomNodes.IndexOf(entranceNode);
+        RotateList(roomNodes, entranceIndex - eIndex);
+
+        // 5) Assign labels to rooms
+        // We'll store the label in node.labelSuffix so we can visualize/log it.
+        // (We'll just log for now; you can later store it in a dictionary, component, etc.)
+        int count = Mathf.Min(roomNodes.Count, lastGrammarOutput.Length);
+
+        // We'll find bossNode by label 'b' after assignment.
+        bossNode = null;
+
+        for (int i = 0; i < roomNodes.Count; i++)
+        {
+            char labelChar;
+            if (i < lastGrammarOutput.Length)
+                labelChar = lastGrammarOutput[i];
+            else
+                labelChar = defaultRoomLabel;
+
+            roomNodes[i].roomLabel = labelChar;
+
+            // If we had to truncate grammar (more symbols than rooms), we simply ignore extras.
+            // If we had more rooms than symbols, we fill with default label.
+
+            // Record entrance/boss nodes
+            if (labelChar == 'e') entranceNode = roomNodes[i];
+            if (labelChar == 'b') bossNode = roomNodes[i];
+
+            Debug.Log($"[RoomLabel] Room {i}: BSP {roomNodes[i].label} at ({roomNodes[i].room.centerX},{roomNodes[i].room.centerY}) => '{labelChar}'");
+        }
+
+        // Fallback if boss wasn't found due to extreme mismatch/truncation
+        if (bossNode == null)
+        {
+            // choose farthest from entrance as boss
+            bossNode = FindFarthestRoomNode(entranceNode, roomNodes);
+            Debug.LogWarning("[RoomLabel] Boss label 'b' did not map to a room; using farthest room as boss instead.");
+        }
+    }
+
+    int DistSq(BSPNode a, BSPNode b)
+    {
+        int dx = a.room.centerX - b.room.centerX;
+        int dy = a.room.centerY - b.room.centerY;
+        return dx * dx + dy * dy;
+    }
+
+    void Shuffle<T>(List<T> list)
+    {
+        for (int i = list.Count - 1; i > 0; i--)
+        {
+            int j = Random.Range(0, i + 1);
+            (list[i], list[j]) = (list[j], list[i]);
+        }
+    }
+
+    void RotateList<T>(List<T> list, int shift)
+    {
+        // shift > 0 moves items right; shift < 0 moves items left
+        int n = list.Count;
+        if (n == 0) return;
+
+        shift %= n;
+        if (shift == 0) return;
+        if (shift < 0) shift += n;
+
+        // create a copy rotated
+        var copy = new List<T>(list);
+        for (int i = 0; i < n; i++)
+            list[(i + shift) % n] = copy[i];
+    }
+
+
+    [System.Serializable]
+    public class WeightedExpansion
+    {
+        public string expansion;
+        public float weight = 1f;
+
+        public WeightedExpansion(string expansion, float weight)
+        {
+            this.expansion = expansion;
+            this.weight = weight;
+        }
+    }
+
+    string GenerateGrammarString_TerminalOnly()
+    {
+        var grammar = BuildDungeonGrammar();
+        string current = string.IsNullOrEmpty(grammarStart) ? "S" : grammarStart;
+
+        int step = 0;
+
+        while (true)
+        {
+            if (current.Length > grammarMaxLength) break;
+            if (step > grammarMaxSteps) break;
+
+            int idx = FindLeftmostNonterminalIndex(current, grammar);
+            if (idx < 0) break;
+
+            step++;
+
+            char nt = current[idx];
+            var options = grammar[nt];
+            string replacement = ChooseWeighted(options);
+
+            current = current.Substring(0, idx) + replacement + current.Substring(idx + 1);
+
+            if (grammarLogSteps)
+                Debug.Log($"[Grammar] Step {step}: expand '{nt}' -> \"{replacement}\" => {current}");
+        }
+
+        return current;
+    }
+
+
+    int FindLeftmostNonterminalIndex(string s, Dictionary<char, List<WeightedExpansion>> grammar)
+    {
+        for (int i = 0; i < s.Length; i++)
+            if (grammar.ContainsKey(s[i]))
+                return i;
+        return -1;
+    }
+
+    string ChooseWeighted(List<WeightedExpansion> options)
+    {
+        float total = 0f;
+        for (int i = 0; i < options.Count; i++)
+            total += Mathf.Max(0f, options[i].weight);
+
+        if (total <= 0f)
+            return options[Random.Range(0, options.Count)].expansion;
+
+        float roll = Random.value * total;
+        float acc = 0f;
+
+        for (int i = 0; i < options.Count; i++)
+        {
+            acc += Mathf.Max(0f, options[i].weight);
+            if (roll <= acc)
+                return options[i].expansion;
+        }
+
+        return options[options.Count - 1].expansion;
+    }
+
+    // ---------------------
+    // Grammar Rules Definition
+    // ---------------------
+
+    Dictionary<char, List<WeightedExpansion>> BuildDungeonGrammar()
+    {
+        // Terminals: e b m c t
+        // Nonterminals: S R P Q F
+
+        // S -> e R b   (guarantees exactly one entrance and one boss)
+        // R generates a sequence of "pieces" P (combat, miniboss+followup, or occasional treasure)
+        // Q -> m F     (miniboss followed by follow-up)
+        // F is weighted to start with treasure often (i.e. treasure-after-miniboss bias)
+
+        var g = new Dictionary<char, List<WeightedExpansion>>();
+
+        g['S'] = new List<WeightedExpansion>
+        {
+            new WeightedExpansion("eRb", 1f)
+        };
+
+        // R: sequence builder. Include "" (epsilon) so it can stop.
+        // These weights control how long the dungeon "story" is.
+        g['R'] = new List<WeightedExpansion>
+        {
+            new WeightedExpansion("PR", 12f),  // keep adding
+            new WeightedExpansion("P", 1f),   // finish after one more
+        };
+
+        // P: the "next room type" generator
+        // Treasure alone should be rarer (lower weight),
+        // while miniboss chain Q has some weight.
+        g['P'] = new List<WeightedExpansion>
+        {
+            new WeightedExpansion("c", 6f),   // lots of combat rooms
+            new WeightedExpansion("Q", 6f),   // sometimes a miniboss beat
+            new WeightedExpansion("t", 1f),   // rare standalone treasure room
+        };
+
+        // Q: miniboss beat -> miniboss + follow-up
+        g['Q'] = new List<WeightedExpansion>
+        {
+            new WeightedExpansion("mF", 1f)
+        };
+
+        // F: follow-up after miniboss
+        // Heavily bias treasure immediately after miniboss.
+        g['F'] = new List<WeightedExpansion>
+        {
+            new WeightedExpansion("t", 8f),    // most common: miniboss -> treasure
+            new WeightedExpansion("tt", 2f),   // double treasure (rarer)
+            new WeightedExpansion("c", 1f),    // sometimes NOT treasure
+        };
+
+        return g;
+    }
+
 
 }

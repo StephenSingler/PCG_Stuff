@@ -329,7 +329,7 @@ MonoBehaviour:
   minPartitionSize: 6
   maxRoomSize: 20
   useRandomSeed: 1
-  seed: 104309953
+  seed: 379331234
   roomTilePrefab: {fileID: 3636992445206523683, guid: 684aa2b33572dc34987a4d8895d9a0f0, type: 3}
   doorPrefab: {fileID: 5989812996981620835, guid: ff1667ea42bcaa1449f49e21cb129e52, type: 3}
   hiddenWallPrefab: {fileID: 5989812996981620835, guid: 06394da9ad58e8d4c96024d035f649a1, type: 3}
@@ -337,7 +337,13 @@ MonoBehaviour:
   showBSPNodes: 0
   showRooms: 0
   showLabels: 0
-  lootPrefab: {fileID: 0}
+  labelRoomsFromGrammar: 1
+  minibossRoomPrefab: {fileID: 345285494263064855, guid: 3ced1a0574ef6a245923ced64887ac56, type: 3}
+  combatRoomPrefab: {fileID: 6548393326354946974, guid: 1f5bbd126ccb00242aad3c2065e210f2, type: 3}
+  roomMarkerY: 3.7
+  defaultRoomLabel: 99
+  sortRoomsByDistanceFromEntrance: 0
+  lootPrefab: {fileID: 3099579346409966741, guid: 147d808b9aecd1d40baea3a224fd866b, type: 3}
   lootBasePerRoom: 0.2
   lootSmallRoomMultiplier: 18
   lootMaxPerRoom: 10
@@ -348,6 +354,10 @@ MonoBehaviour:
   spawnGoalEdgePadding: 1
   placeGoalFarFromSpawn: 1
   preventSpawnGoalOnLoot: 1
+  grammarStart: S
+  grammarMaxSteps: 50
+  grammarMaxLength: 200
+  grammarLogSteps: 1
 --- !u!4 &880560500
 Transform:
   m_ObjectHideFlags: 0
